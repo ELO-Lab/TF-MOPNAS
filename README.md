@@ -27,16 +27,16 @@ You can reproduce all experimental results by **re-conducting all experiments by
 $ python <running_file> --n_runs <the_number_of_experiment_runs, default: 31> --seed <initial_random_seed, default: 0>
 ```
 To conduct searches on a specific search space, we just run the corresponding file.
-|running_file               |Benchmark              |  Variant                               |              
+|running_file               |Benchmark              |  Algorithm                               |              
 |:--------------------------|:----------------------|:---------------------------------------|
-|`mo_prune_101.py`          |NAS-Bench-101          |TF-MOPNAS (random cell topologies + edges pruning)|
-|`mo_prune_1shot1.py`       |NAS-Bench-1shot1       |TF-MOPNAS (cell topologies + edges pruning)|
-|`mo_prune_1shot1_random.py`|NAS-Bench-1shot1       |TF-MOPNAS (random cell topologies + edges pruning)|
-|`mo_prune_201.py`          |NAS-Bench-201          |TF-MOPNAS (edges pruning)|
+|`run_101.py`          |NAS-Bench-101          |TF-MOPNAS (random cell topologies + edges pruning)|
+|`run_1shot1.py`       |NAS-Bench-1shot1       |TF-MOPNAS (cell topologies + edges pruning)|
+|`run_1shot1_random.py`|NAS-Bench-1shot1       |TF-MOPNAS (random cell topologies + edges pruning)|
+|`run_201.py`          |NAS-Bench-201          |TF-MOPNAS (edges pruning)|
 
 For example, we want to search on NAS-Bench-201 benchmark:
 ```shell
-$ python mo_prune_201.py
+$ python run_201.py
 ```
 **MOENAS + TF-MOENAS**
 
