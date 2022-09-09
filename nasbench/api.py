@@ -13,13 +13,10 @@
 # limitations under the License.
 
 """User interface for the NAS Benchmark dataset.
-
 Before using this API, download the data files from the links in the README.
-
 Usage:
   # Load the data from file (this will take some time)
   nasbench = api.NASBench('/path/to/nasbench.tfrecord')
-
   # Create an Inception-like module (5x5 convolution replaced with two 3x3
   # convolutions).
   model_spec = api.ModelSpec(
@@ -33,11 +30,8 @@ Usage:
               [0, 0, 0, 0, 0, 0, 0]],   # output layer
       # Operations at the vertices of the module, matches order of matrix
       ops=[INPUT, CONV1X1, CONV3X3, CONV3X3, CONV3X3, MAXPOOL3X3, OUTPUT])
-
-
   # Query this model from dataset
   data = nasbench.query(model_spec)
-
 Adjacency matrices are expected to be upper-triangular 0-1 matrices within the
 defined search space (7 vertices, 9 edges, 3 allowed ops). The first and last
 operations must be 'input' and 'output'. The other operations should be from
@@ -45,12 +39,10 @@ config['available_ops']. Currently, the available operations are:
   CONV3X3 = "conv3x3-bn-relu"
   CONV1X1 = "conv1x1-bn-relu"
   MAXPOOL3X3 = "maxpool3x3"
-
 When querying a spec, the spec will first be automatically pruned (removing
 unused vertices and edges along with ops). If the pruned spec is still out of
 the search space, an OutOfDomainError will be raised, otherwise the data is
 returned.
-
 The returned data object is a dictionary with the following keys:
   - module_adjacency: numpy array for the adjacency matrix
   - module_operations: list of operation labels
@@ -59,17 +51,13 @@ The returned data object is a dictionary with the following keys:
   - train_accuracy: training accuracy
   - validation_accuracy: validation_accuracy
   - test_accuracy: testing accuracy
-
 Instead of querying the dataset for a single run of a model, it is also possible
 to retrieve all metrics for a given spec, using:
-
   fixed_stats, computed_stats = nasbench.get_metrics_from_spec(model_spec)
-
 The fixed_stats is a dictionary with the keys:
   - module_adjacency
   - module_operations
   - trainable_parameters
-
 The computed_stats is a dictionary from epoch count to a list of metric
 dicts. For example, computed_stats[108][0] contains the metrics for the first
 repeat of the provided model trained to 108 epochs. The available keys are:
@@ -118,7 +106,6 @@ class NASBench(object):
     """User-facing API for accessing the NASBench dataset."""
     def __init__(self, dataset_file=None, seed=None):
         """Initialize dataset, this should only be done once per experiment.
-
         Args:
           dataset_file: path to .tfrecord file containing the dataset.
           seed: random seed used for sampling queried models. Two NASBench objects
@@ -204,18 +191,14 @@ class NASBench(object):
 
     def query(self, model_spec, epochs=108, stop_halfway=False):
         """Fetch one of the evaluations for this model spec.
-
         Each call will sample one of the config['num_repeats'] evaluations of the
         model. This means that repeated queries of the same model (or isomorphic
         models) may return identical metrics.
-
         This function will increment the budget counters for benchmarking purposes.
         See self.training_time_spent, and self.total_epochs_spent.
-
         This function also allows querying the evaluation metrics at the halfway
         point of training using stop_halfway. Using this option will increment the
         budget counters only up to the halfway point.
-
         Args:
           model_spec: ModelSpec object.
           epochs: number of epochs trained. Must be one of the evaluated number of
@@ -224,10 +207,8 @@ class NASBench(object):
             and accuracies at the halfway point of training (num_epochs/2).
             Otherwise, returns the time and accuracies at the end of training
             (num_epochs).
-
         Returns:
           dict containing the evaluated data for this object.
-
         Raises:
           OutOfDomainError: if model_spec or num_epochs is outside the search space.
         """
@@ -264,13 +245,10 @@ class NASBench(object):
 
     def is_valid(self, model_spec):
         """Checks the validity of the model_spec.
-
         For the purposes of benchmarking, this does not increment the budget
         counters.
-
         Args:
           model_spec: ModelSpec object.
-
         Returns:
           True if model is within space.
         """
@@ -291,7 +269,6 @@ class NASBench(object):
 
     def evaluate(self, model_spec, model_dir):
         """Trains and evaluates a model spec from scratch (does not query dataset).
-
         This function runs the same procedure that was used to generate each
         evaluation in the dataset.  Because we are not querying the generated
         dataset of trained models, there are no limitations on number of vertices,
@@ -299,11 +276,9 @@ class NASBench(object):
         the dataset due to randomness. By default, this uses TPUs for evaluation but
         CPU/GPU can be used by setting --use_tpu=false (GPU will require installing
         tensorflow-gpu).
-
         Args:
           model_spec: ModelSpec object.
           model_dir: directory to store the checkpoints, summaries, and logs.
-
         Returns:
           dict contained the evaluated data for this object, same structure as
           returned by query().
@@ -336,13 +311,10 @@ class NASBench(object):
 
     def get_metrics_from_hash(self, module_hash):
         """Returns the metrics for all epochs and all repeats of a hash.
-
         This method is for dataset analysis and should not be used for benchmarking.
         As such, it does not increment any of the budget counters.
-
         Args:
           module_hash: MD5 hash, i.e., the values yielded by hash_iterator().
-
         Returns:
           fixed stats and computed stats of the model spec provided.
         """
@@ -354,10 +326,8 @@ class NASBench(object):
         """Returns the metrics for all epochs and all repeats of a model.
         This method is for dataset analysis and should not be used for benchmarking.
         As such, it does not increment any of the budget counters.
-
         Args:
           model_spec: ModelSpec object.
-
         Returns:
           fixed stats and computed stats of the model spec provided.
         """

@@ -1,4 +1,4 @@
-from zero_cost_methods.utils_2.utils import (
+from training_free_metrics.utils_2.utils import (
     iter_flatten,
     set_seed,
     get_config_from_args,

@@ -3,13 +3,13 @@ Original source code: https://github.com/automl/NASLib
 """
 
 from .predictor import Predictor
-from zero_cost_methods.utils_2.utils import get_train_val_loaders
+from training_free_metrics.utils_2.utils import get_train_val_loaders
 from .utils.models.build_darts_net import NetworkCIFAR
 from .utils.models import nasbench2 as nas201_arch
 from .utils.models import nasbench1 as nas101_arch
 from .utils.models import nasbench1_spec
 from .utils.pruners import predictive
-from zero_cost_methods.search_spaces.darts.conversions import convert_compact_to_genotype
+from training_free_metrics.search_spaces.darts.conversions import convert_compact_to_genotype
 from pruning_models.model_201 import *
 from pruning_models.model_101 import *
 
@@ -92,7 +92,7 @@ class ZeroCostV2(Predictor):
         torch.cuda.empty_cache()
         return score
 
-    def query__(self, **kwargs):
+    def compute(self, **kwargs):
         if self.config['search_space'] == 'NASBench101':
             network = Network(kwargs['spec'],
                   stem_out=128,

@@ -5,7 +5,7 @@ import pickle as p
 import sys
 import time
 from copy import deepcopy
-
+from nats_bench import create
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -13,11 +13,18 @@ from utils import get_model_infos
 from pruning_models.model_201 import *
 from utils import calculate_IGD_value, set_seed
 from utils import get_front_0
-from zero_cost_methods import get_config_for_zero_cost_predictor, get_zero_cost_predictor
+from training_free_metrics import get_config_for_training_free_calculator, get_training_free_calculator
 
 xshape = (1, 3, 32, 32)
 nClasses = 10
 dataset = 'CIFAR-10'
+OPS_LIST = {
+    '0': 'none',
+    '1': 'skip_connect',
+    '2': 'nor_conv_1x1',
+    '3': 'nor_conv_3x3',
+    '4': 'avg_pool_3x3'
+}
 
 
 def convert_keep_mask_2_arch_str(keep_mask):
@@ -29,23 +36,91 @@ def convert_keep_mask_2_arch_str(keep_mask):
     return arch_str
 
 
-def mo_prune(tf_ind, path_data, path_results, seed):
-    list_arch_parent = [[[True, True, True, True, True],
-                         [True, True, True, True, True],
-                         [True, True, True, True, True],
-                         [True, True, True, True, True],
-                         [True, True, True, True, True],
-                         [True, True, True, True, True]]]
+def convert_to_ori_api_input(arch_str):
+    ori_input = f'|{OPS_LIST[arch_str[0]]}~0|+' \
+                f'|{OPS_LIST[arch_str[1]]}~0|{OPS_LIST[arch_str[2]]}~1|+' \
+                f'|{OPS_LIST[arch_str[3]]}~0|{OPS_LIST[arch_str[4]]}~1|{OPS_LIST[arch_str[5]]}~2|'
+    return ori_input
+
+
+def evaluate(final_opt_archs, api, pf, path_results):
+    approximation_set = []
+    approximation_front = []
+    total_pos_training_time = 0.0
+    best_arch, best_test_acc = None, 0.0
+    for keep_mask in final_opt_archs:
+        arch = convert_to_ori_api_input(convert_keep_mask_2_arch_str(keep_mask))
+        idx = api.query_index_by_arch(arch)  # query the index of architecture in database
+
+        info = api.get_more_info(idx, dataset='cifar10', hp='200', is_random=False)
+        cost = api.get_cost_info(idx, dataset='cifar10', hp='200')
+
+        FLOPs = cost['flops'] / 1e3
+        test_error = 1.0 - info['test-accuracy'] / 100
+        F = [FLOPs, test_error]
+        total_pos_training_time += info['train-per-time'] * 200
+
+        if info['test-accuracy'] > best_test_acc:
+            best_arch = arch
+            best_test_acc = info['test-accuracy']
+
+        approximation_set.append(arch)
+        approximation_front.append(F)
+    approximation_front = np.round(np.array(approximation_front), 4)
+    idx_front_0 = get_front_0(approximation_front)
+
+    approximation_set = np.array(approximation_set)[idx_front_0]
+    approximation_front = approximation_front[idx_front_0]
+    IGD = np.round(calculate_IGD_value(pareto_front=pf, non_dominated_front=approximation_front), 6)
+
+    logging.info(f'Evaluate -> Done!\n')
+    logging.info(f'IGD: {IGD}')
+    logging.info(f'Best Architecture: {best_arch}')
+    logging.info(f'Best Architecture (performance): {np.round(best_test_acc, 2)}\n')
+    rs = {
+        'n_archs_evaluated': len(final_opt_archs),
+        'approximation_set': approximation_set,
+        'approximation_front': approximation_front,
+        'total_pos_training_time': total_pos_training_time,
+        'best_arch_found': best_arch,
+        'best_arch_found (performance)': np.round(best_test_acc, 2),
+        'IGD': IGD,
+    }
+    p.dump(rs, open(f'{path_results}/results_evaluation.p', 'wb'))
+
+    logging.info(f'--- Approximation set ---\n')
+    for i in range(len(approximation_set)):
+        logging.info(
+            f'arch: {approximation_set[i]} - FLOPs: {approximation_front[i][0]} - testing error: {approximation_front[i][1]}\n')
+    plt.scatter(approximation_front[:, 0], approximation_front[:, 1], facecolors='blue', s=30,
+                label='Approximation front')
+    plt.scatter(pf[:, 0], pf[:, 1], edgecolors='red', facecolors='none', s=60, label='Pareto-optimal front')
+    plt.legend()
+    plt.title(f'NAS-Bench-201, {dataset}, Synflow')
+    plt.savefig(f'{path_results}/approximation_front.jpg')
+    plt.clf()
+    return IGD, np.round(best_test_acc, 2)
+
+
+def prune(tf_ind, path_data, path_results, seed):
+    list_arch_parent = [
+        [[True, True, True, True, True],
+         [True, True, True, True, True],
+         [True, True, True, True, True],
+         [True, True, True, True, True],
+         [True, True, True, True, True],
+         [True, True, True, True, True]]
+    ]  # At beginning, activating all operations
     max_nPrunes = len(list_arch_parent[-1])
     i = 0
 
-    config = get_config_for_zero_cost_predictor(search_space='NASBench201', dataset=dataset,
-                                                seed=seed, path_data=path_data)
-    ZC_predictor = get_zero_cost_predictor(config=config, method_type=tf_ind)
+    config = get_config_for_training_free_calculator(search_space='NASBench201', dataset=dataset,
+                                                     seed=seed, path_data=path_data)
+    tf_calculator = get_training_free_calculator(config=config, method_type=tf_ind)
 
     id_arch = 0
     while i <= max_nPrunes - 1:
-        logging.info(f'Number of pruning: {i + 1}\n')
+        logging.info(f'------- The {i + 1}-th pruning -------\n')
         list_arch_child = []
         F_arch_child = []
         for arch in list_arch_parent:
@@ -60,7 +135,7 @@ def mo_prune(tf_ind, path_data, path_results, seed):
                 network = get_model_from_arch_str(flat_list, nClasses)
 
                 flop, param = get_model_infos(network, xshape)
-                tf_metric_value = ZC_predictor.query__(keep_mask=flat_list)[tf_ind]
+                tf_metric_value = tf_calculator.compute(keep_mask=flat_list)[tf_ind]
                 F = [flop, -tf_metric_value]
                 logging.info(f'ID Arch: {id_arch}')
                 logging.info(f'Keep mask:\n{list_arch_child[-1]}')
@@ -70,47 +145,12 @@ def mo_prune(tf_ind, path_data, path_results, seed):
                 arch_child[i][j] = False
         idx_front_0 = get_front_0(F_arch_child)
         list_arch_parent = np.array(deepcopy(list_arch_child))[idx_front_0]
-        logging.info(f'Number of pruning architectures: {len(list_arch_parent)}\n')
+        logging.info(f'Number of architectures for the next pruning: {len(list_arch_parent)}\n')
         i += 1
 
-    p.dump(list_arch_parent, open(f'{path_results}/after_prune_result.p', 'wb'))
-    return list_arch_parent
-
-
-def evaluate(list_prune_arch, data, pf, path_results):
-    final_list_arch = []
-    final_list_F_arch = []
-    total_train_time = 0.0
-    for keep_mask in list_prune_arch:
-        arch_str = convert_keep_mask_2_arch_str(keep_mask)
-        FLOPs = data['200'][arch_str]['FLOPs'] / 1e3
-        test_error = 1 - data['200'][arch_str]['test_acc'][-1]
-        F = [FLOPs, test_error]
-        total_train_time += data['200'][arch_str]['train_time'] * 200
-        final_list_arch.append(arch_str)
-        final_list_F_arch.append(F)
-    final_list_F_arch = np.round(np.array(final_list_F_arch), 4)
-    idx_front_0 = get_front_0(final_list_F_arch)
-
-    final_list_arch = np.array(final_list_arch)[idx_front_0]
-    final_list_F_arch = final_list_F_arch[idx_front_0]
-    IGD = np.round(calculate_IGD_value(pareto_front=pf, non_dominated_front=final_list_F_arch), 6)
-    rs = {
-        'n_archs_evaluated': len(list_prune_arch),
-        'arch_lst': final_list_arch,
-        'F_lst': final_list_F_arch,
-        'total_train_time': total_train_time,
-        'IGD': IGD
-    }
-    p.dump(rs, open(f'{path_results}/results_(evaluation).p', 'wb'))
-
-    plt.scatter(final_list_F_arch[:, 0], final_list_F_arch[:, 1], facecolors='blue', s=30, label='approximation front')
-    plt.scatter(pf[:, 0], pf[:, 1], edgecolors='red', facecolors='none', s=60, label='pareto front')
-    plt.legend()
-    plt.title(f'NAS-Bench-201, {dataset}, Synflow')
-    plt.savefig(f'{path_results}/approximation_front.jpg')
-    plt.clf()
-    logging.info(f'Evaluate Done! IGD: {IGD}')
+    final_opt_archs = list_arch_parent
+    p.dump(final_opt_archs, open(f'{path_results}/pruning_results.p', 'wb'))
+    return final_opt_archs
 
 
 def main(kwargs):
@@ -126,57 +166,59 @@ def main(kwargs):
         path_results = './results/201/TF-MOPNAS'
     else:
         path_results = kwargs.path_results
-    tf_metric = 'synflow'
+    tf_metric = 'synflow'  # can be another training-free metric, i.e., jacov, snip, grad_norm, etc.
 
-    evaluate_mode = bool(kwargs.evaluate)
-    data, pf = None, None
-    if evaluate_mode:
-        data = p.load(open(f'{path_data}/NASBench201/[{dataset}]_data.p', 'rb'))
-        pf = p.load(open(f'{path_data}/NASBench201/[{dataset}]_pareto_front(testing).p', 'rb'))
-        pf[:, 0] /= 1e3
+    api = create(f'{path_data}/NASBench201/NATS-tss-v1_0-3ffb9-simple', 'tss', fast_mode=True, verbose=False)
+    pareto_opt_front = p.load(open(f'{path_data}/NASBench201/[{dataset}]_pareto_front(testing).p', 'rb'))
+    pareto_opt_front[:, 0] /= 1e3
+
+    logging.info(f'******* PROBLEM *******')
+    logging.info(f'- Benchmark: NAS-Bench-201')
+    logging.info(f'- Dataset: CIFAR-10\n')
+
+    logging.info(f'******* RUNNING *******')
+    logging.info(f'- Pruning:')
+    logging.info(f'\t+ The first objective (minimize): FLOPs')
+    logging.info(f'\t+ The second objective (minimize): -Synflow')
+
+    logging.info(f'- Evaluate:')
+    logging.info(f'\t+ The first objective (minimize): FLOPs')
+    logging.info(f'\t+ The second objective (minimize): test error\n')
+
+    logging.info(f'******* ENVIRONMENT *******')
+    logging.info(f'- Path for saving results: {path_results}\n')
+
+    final_IGD_lst = []
+    best_acc_found_lst = []
 
     for run_i in range(n_runs):
         logging.info(f'Run ID: {run_i + 1}')
-        path_results_ = path_results + '/' + f'{run_i}'
+        sub_path_results = path_results + '/' + f'{run_i}'
 
         try:
-            os.mkdir(path_results_)
+            os.mkdir(sub_path_results)
         except FileExistsError:
             pass
-        logging.info(f'Path for saving results: {path_results_}')
+        logging.info(f'Path for saving results: {sub_path_results}')
 
         random_seed = random_seeds_list[run_i]
         logging.info(f'Random seed: {run_i}')
         set_seed(random_seed)
 
         s = time.time()
-        list_prune_arch = mo_prune(tf_ind=tf_metric, path_data=path_data, path_results=path_results_,
-                                   seed=random_seed)
+        final_opt_archs = prune(tf_ind=tf_metric, path_data=path_data, path_results=sub_path_results, seed=random_seed)
         executed_time = time.time() - s
-        logging.info(f'Prune Done! Executed time: {executed_time} seconds.\n')
-        p.dump(executed_time, open(f'{path_results_}/running_time.p', 'wb'))
+        logging.info(f'Prune Done! Execute in {executed_time} seconds.\n')
+        p.dump(executed_time, open(f'{sub_path_results}/running_time.p', 'wb'))
 
-        if evaluate_mode:
-            evaluate(list_prune_arch=list_prune_arch, data=data, pf=pf, path_results=path_results_)
+        IGD, best_acc = evaluate(final_opt_archs=final_opt_archs, api=api, pf=pareto_opt_front,
+                                 path_results=sub_path_results)
+        final_IGD_lst.append(IGD)
+        best_acc_found_lst.append(best_acc)
 
-        with open(f'{path_results_}/logging.txt', 'w') as f:
-            f.write(f'******* PROBLEM *******\n')
-            f.write(f'- Benchmark: NAS-Bench-201\n')
-            f.write(f'- Dataset: CIFAR-10\n\n')
-
-            f.write(f'******* RUNNING *******\n')
-            f.write(f'- Pruning:\n')
-            f.write(f'\t+ The first objective (minimize): FLOPs\n')
-            f.write(f'\t+ The second objective (minimize): -Synflow\n')
-            f.write(f'- Evaluate:\n')
-            f.write(f'\t+ The first objective (minimize): FLOPs\n')
-            f.write(f'\t+ The second objective (minimize): test error\n\n')
-
-            f.write(f'******* ENVIRONMENT *******\n')
-            f.write(f'- ID experiments: {run_i}\n')
-            f.write(f'- Random seed: {random_seed}\n')
-            f.write(f'- Path for saving results: {path_results_}\n\n')
-        print('-' * 40)
+    logging.info(f'Average IGD: {np.round(np.mean(final_IGD_lst), 4)} ({np.round(np.std(final_IGD_lst), 4)})')
+    logging.info(
+        f'Average best test-accuracy: {np.round(np.mean(best_acc_found_lst), 4)} ({np.round(np.std(best_acc_found_lst), 4)})')
 
 
 if __name__ == '__main__':
@@ -187,7 +229,6 @@ if __name__ == '__main__':
     parser.add_argument('--path_results', type=str, default=None, help='path for saving results')
     parser.add_argument('--n_runs', type=int, default=31, help='number of experiment runs')
     parser.add_argument('--seed', type=int, default=0, help='random seed')
-    parser.add_argument('--evaluate', type=int, default=1, help='evaluate after pruning')
     args = parser.parse_args()
 
     log_format = '%(asctime)s %(message)s'

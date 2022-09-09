@@ -12,10 +12,9 @@ from nasbench import wrap_api as api
 from utils import get_front_0
 from utils import calculate_IGD_value
 from utils import set_seed
-from zero_cost_methods import get_config_for_zero_cost_predictor, get_zero_cost_predictor
+from training_free_metrics import get_config_for_training_free_calculator, get_training_free_calculator
 import matplotlib.pyplot as plt
 
-API = api.NASBench_()
 xshape = (1, 3, 32, 32)
 INPUT = 'input'
 OUTPUT = 'output'
@@ -59,7 +58,7 @@ def create_nasbench_adjacency_matrix_with_loose_ends(parents):
     return adjacency_matrix
 
 
-def random_edges_matrix():
+def random_edges_matrix(api_benchmark):
     OPS_MATRIX = [INPUT, CONV1X1, CONV1X1, MAXPOOL3X3, MAXPOOL3X3, CONV3X3, OUTPUT]
     while True:
         edges_matrix = np.array([[False, False, False, False, False, False, False],
@@ -88,15 +87,79 @@ def random_edges_matrix():
         parents = edge_matrix_2_parent_config(edges_matrix)
         ADJ_MATRIX = create_nasbench_adjacency_matrix_with_loose_ends(parents)
         model_spec = api.ModelSpec(ADJ_MATRIX, OPS_MATRIX)
-        if API.is_valid(model_spec):
+        if api_benchmark.is_valid(model_spec):
             return edges_matrix
 
-def mo_prune(tf_ind, path_data, path_results, seed):
+def evaluate(final_opt_edge_matrices, final_opt_ops_matrices, api_benchmark, pf, path_results):
+    adj_matrix_lst = []
+    ops_matrix_lst = []
+    approximation_front = []
+    total_pos_training_time = 0.0
+    best_adj_matrix, best_ops_matrix, best_test_acc = None, None, 0.0
+    for i in range(len(final_opt_edge_matrices)):
+        ADJ_MATRIX = final_opt_edge_matrices[i]
+        OPS_MATRIX = format_ops_matrix_raw_2(final_opt_ops_matrices[i])
+        adj_matrix_lst.append(ADJ_MATRIX)
+        ops_matrix_lst.append(OPS_MATRIX)
+        spec = api.ModelSpec(ADJ_MATRIX, OPS_MATRIX)
+
+        info = api_benchmark.query(spec)
+
+        params = np.round(info['n_params'] / 1e8, 6)
+        approximation_front.append([params, 1 - info['test_acc']])
+
+        total_pos_training_time += info['train_time']
+
+        if info['test_acc'] > best_test_acc:
+            best_adj_matrix = ADJ_MATRIX
+            best_ops_matrix = OPS_MATRIX
+            best_test_acc = info['test_acc']
+
+    approximation_front = np.array(approximation_front)
+    adj_matrix_lst = np.array(adj_matrix_lst)
+    ops_matrix_lst = np.array(ops_matrix_lst)
+
+    idx = get_front_0(approximation_front)
+    approximation_front = approximation_front[idx]
+    approximation_front = np.unique(approximation_front, axis=0)
+    adj_matrix_lst = adj_matrix_lst[idx]
+    ops_matrix_lst = ops_matrix_lst[idx]
+
+    IGD = np.round(calculate_IGD_value(pareto_front=pf, non_dominated_front=approximation_front), 6)
+    logging.info(f'Evaluate -> Done!\n')
+    logging.info(f'IGD: {IGD}')
+    logging.info(f'Best Architecture (adj matrix): {best_adj_matrix}')
+    logging.info(f'Best Architecture (ops matrix): {best_ops_matrix}')
+    logging.info(f'Best Architecture (performance): {np.round(best_test_acc, 2)}\n')
+
+    rs = {
+        'n_archs_evaluated': len(final_opt_edge_matrices),
+        'adj_matrix_lst': adj_matrix_lst,
+        'ops_matrix_lst': ops_matrix_lst,
+        'approximation_front': approximation_front,
+        'total_pos_training_time': total_pos_training_time,
+        'best_arch_found (adj_matrix)': best_adj_matrix,
+        'best_arch_found (ops_matrix)': best_ops_matrix,
+        'best_arch_found (performance)': np.round(best_test_acc, 2),
+        'IGD': IGD,
+    }
+    p.dump(rs, open(f'{path_results}/results_evaluation.p', 'wb'))
+
+    plt.scatter(approximation_front[:, 0], approximation_front[:, 1], facecolors='blue', s=30, label='Approximation front')
+    plt.scatter(pf[:, 0], pf[:, 1], edgecolors='red', facecolors='none', s=60, label='Pareto-optimal front')
+    plt.legend()
+    plt.title(f'NAS-Bench-101, Synflow')
+    plt.savefig(f'{path_results}/approximation_front.jpg')
+    plt.clf()
+    return IGD, np.round(best_test_acc, 2)
+
+
+def prune(tf_ind, maxEvals, api_benchmark, path_data, path_results, seed):
     id_arch = 0
-    maxEvals = 3000
-    config = get_config_for_zero_cost_predictor(search_space='NASBench101', dataset='CIFAR-10',
-                                                seed=seed, path_data=path_data)
-    ZC_predictor = get_zero_cost_predictor(config=config, method_type=tf_ind)
+    maxEvals = maxEvals
+    config = get_config_for_training_free_calculator(search_space='NASBench101', dataset='CIFAR-10',
+                                                     seed=seed, path_data=path_data)
+    tf_calculator = get_training_free_calculator(config=config, method_type=tf_ind)
     nEvals_hist = []
     edge_matrix_full = []
     ops_matrix_full = []
@@ -106,11 +169,11 @@ def mo_prune(tf_ind, path_data, path_results, seed):
                                   [True, True, True],
                                   [True, True, True],
                                   [True, True, True],
-                                  [True, True, True]]])
+                                  [True, True, True]]])  # At beginning, activating all operations
         max_nPrunes = 5
         i_prune = 0
 
-        edge_matrix = random_edges_matrix()
+        edge_matrix = random_edges_matrix(api_benchmark)
         parents = edge_matrix_2_parent_config(edge_matrix)
         ADJ_MATRIX = create_nasbench_adjacency_matrix_with_loose_ends(parents)
 
@@ -131,12 +194,11 @@ def mo_prune(tf_ind, path_data, path_results, seed):
                                       stem_out=128,
                                       num_stacks=3,
                                       num_mods=3,
-                                      num_classes=10
-                                      )
+                                      num_classes=10)
                     flop, params = get_model_infos(network, xshape)
                     params = np.round(params / 1e2, 6)
 
-                    tf_metric_value = ZC_predictor.query__(spec=spec)[tf_ind]
+                    tf_metric_value = tf_calculator.compute(spec=spec)[tf_ind]
 
                     F_value = [params, -tf_metric_value]
                     logging.info(f'ID Arch: {id_arch}')
@@ -148,7 +210,7 @@ def mo_prune(tf_ind, path_data, path_results, seed):
             idx_front_0 = get_front_0(F_arch_child)
             list_parents = np.array(deepcopy(list_arch_child))[idx_front_0]
             F_parents = np.array(deepcopy(F_arch_child))[idx_front_0]
-            logging.info(f'Number of architectures on the next pruning time: {len(list_parents)}\n')
+            logging.info(f'Number of architectures for the next pruning: {len(list_parents)}\n')
             i_prune += 1
         logging.info(f'Edge matrix:\n{ADJ_MATRIX}')
         for n, ops_matrix_raw in enumerate(list_parents):
@@ -158,62 +220,18 @@ def mo_prune(tf_ind, path_data, path_results, seed):
             ops_matrix_full.append(OPS_MATRIX)
             F_full.append(F_parents[n])
             logging.info(f'Operations matrix:\n{OPS_MATRIX}')
-        print('-' * 40)
-    p.dump([nEvals_hist, edge_matrix_full, ops_matrix_full, F_full], open(f'{path_results}/after_search_result_history.p', 'wb'))
+        logging.info('-' * 40)
+    p.dump([nEvals_hist, edge_matrix_full, ops_matrix_full, F_full], open(f'{path_results}/pruning_results_history.p', 'wb'))
     idx_front_0 = get_front_0(F_full)
     edge_matrix_final = np.array(deepcopy(edge_matrix_full))[idx_front_0]
     ops_matrix_final = np.array(deepcopy(ops_matrix_full))[idx_front_0]
-    p.dump([nEvals_hist, edge_matrix_final, ops_matrix_final], open(f'{path_results}/after_search_result.p', 'wb'))
+    p.dump([nEvals_hist, edge_matrix_final, ops_matrix_final], open(f'{path_results}/pruning_results.p', 'wb'))
     return edge_matrix_final, ops_matrix_final
-
-
-def evaluate(edge_matrix_final, ops_matrix_final, data, pf, path_results):
-    adj_matrix_lst = []
-    ops_matrix_lst = []
-    F_lst = []
-    total_train_time = 0.0
-    for i in range(len(edge_matrix_final)):
-        ADJ_MATRIX = edge_matrix_final[i]
-        OPS_MATRIX = format_ops_matrix_raw_2(ops_matrix_final[i])
-        adj_matrix_lst.append(ADJ_MATRIX)
-        ops_matrix_lst.append(OPS_MATRIX)
-        spec = api.ModelSpec(ADJ_MATRIX, OPS_MATRIX)
-        module_hash = API.get_module_hash(spec)
-        params = np.round(data['108'][module_hash]['n_params'] / 1e8, 6)
-        F_lst.append([params, 1 - data['108'][module_hash]['test_acc']])
-        total_train_time += data['108'][module_hash]['train_time']
-
-    F_lst = np.array(F_lst)
-    adj_matrix_lst = np.array(adj_matrix_lst)
-    ops_matrix_lst = np.array(ops_matrix_lst)
-    idx = get_front_0(F_lst)
-    F_lst = F_lst[idx]
-    F_lst = np.unique(F_lst, axis=0)
-    adj_matrix_lst = adj_matrix_lst[idx]
-    ops_matrix_lst = ops_matrix_lst[idx]
-    IGD = np.round(calculate_IGD_value(pareto_front=pf, non_dominated_front=F_lst), 6)
-    logging.info(f'Evaluate Done! IGD: {IGD}')
-
-    rs = {
-        'n_archs_evaluated': len(edge_matrix_final),
-        'adj_matrix_lst': adj_matrix_lst,
-        'ops_matrix_lst': ops_matrix_lst,
-        'F_lst': F_lst,
-        'total_train_time': total_train_time,
-        'IGD': IGD
-    }
-    p.dump(rs, open(f'{path_results}/results_(evaluation).p', 'wb'))
-
-    plt.scatter(F_lst[:, 0], F_lst[:, 1], facecolors='blue', s=30, label='approximation front')
-    plt.scatter(pf[:, 0], pf[:, 1], edgecolors='red', facecolors='none', s=60, label='pareto front')
-    plt.legend()
-    plt.title(f'NAS-Bench-101, Synflow')
-    plt.savefig(f'{path_results}/approximation_front.jpg')
-    plt.clf()
 
 
 def main(kwargs):
     n_runs = kwargs.n_runs
+    maxEvals = kwargs.maxEvals
     init_seed = kwargs.seed
     random_seeds_list = [init_seed + run * 100 for run in range(n_runs)]
 
@@ -226,59 +244,63 @@ def main(kwargs):
     else:
         path_results = kwargs.path_results
     tf_metric = 'synflow'
-    evaluate_mode = bool(kwargs.evaluate)
-    data, pf = None, None
-    if evaluate_mode:
-        data = p.load(open(f'{path_data}/NASBench101/data.p', 'rb'))
-        pf = p.load(open(f'{path_data}/NASBench101/pareto_front(testing).p', 'rb'))
+
+    # API = api.NASBench_(f'{path_data}/NASBench101/nasbench_full.tfrecord')
+    API = api.NASBench_(f'{path_data}/NASBench101/data.p')
+
+    pareto_opt_front = p.load(open(f'{path_data}/NASBench101/pareto_front(testing).p', 'rb'))
+
+    logging.info(f'******* PROBLEM *******')
+    logging.info(f'- Benchmark: NAS-Bench-101')
+    logging.info(f'- Dataset: CIFAR-10\n')
+
+    logging.info(f'******* RUNNING *******')
+    logging.info(f'- Pruning:')
+    logging.info(f'\t+ The first objective (minimize): #params')
+    logging.info(f'\t+ The second objective (minimize): -Synflow')
+
+    logging.info(f'- Evaluate:')
+    logging.info(f'\t+ The first objective (minimize): #params')
+    logging.info(f'\t+ The second objective (minimize): test error\n')
+
+    logging.info(f'******* ENVIRONMENT *******')
+    logging.info(f'- Path for saving results: {path_results}\n')
+
+    final_IGD_lst = []
+    best_acc_found_lst = []
 
     for run_i in range(n_runs):
         logging.info(f'Run ID: {run_i + 1}')
-        path_results_ = path_results + '/' + f'{run_i}'
+        sub_path_results = path_results + '/' + f'{run_i}'
 
         try:
-            os.mkdir(path_results_)
+            os.mkdir(sub_path_results)
         except FileExistsError:
             pass
-        logging.info(f'Path for saving results: {path_results_}')
+        logging.info(f'Path for saving results: {sub_path_results}')
 
         random_seed = random_seeds_list[run_i]
         logging.info(f'Random seed: {run_i}')
         set_seed(random_seed)
 
         s = time.time()
-        edge_matrix_lst, ops_matrix_lst = mo_prune(tf_ind=tf_metric,
-                                                   path_data=path_data, path_results=path_results_,
-                                                   seed=random_seed)
+        final_opt_edge_matrices, final_opt_ops_matrices = prune(tf_ind=tf_metric, path_data=path_data, api_benchmark=API,
+                                                                maxEvals=maxEvals,
+                                                                path_results=sub_path_results, seed=random_seed)
         e = time.time()
         executed_time = e - s
-        logging.info(f'Search - Done. Executed time: {executed_time} seconds.\n')
+        logging.info(f'Prune Done! Execute in {executed_time} seconds.\n')
+        p.dump(executed_time, open(f'{sub_path_results}/running_time.p', 'wb'))
 
-        p.dump(executed_time, open(f'{path_results_}/running_time.p', 'wb'))
+        IGD, best_acc = evaluate(final_opt_edge_matrices=final_opt_edge_matrices,
+                                 final_opt_ops_matrices=final_opt_ops_matrices,
+                                 api_benchmark=API, pf=pareto_opt_front, path_results=sub_path_results)
+        final_IGD_lst.append(IGD)
+        best_acc_found_lst.append(best_acc)
 
-        if evaluate_mode:
-            evaluate(edge_matrix_final=edge_matrix_lst,
-                     ops_matrix_final=ops_matrix_lst,
-                     data=data, pf=pf, path_results=path_results_)
-
-        with open(f'{path_results_}/logging.txt', 'w') as f:
-            f.write(f'******* PROBLEM *******\n')
-            f.write(f'- Benchmark: NAS-Bench-101\n\n')
-
-            f.write(f'******* RUNNING *******\n')
-            f.write(f'- Pruning:\n')
-            f.write(f'\t+ The first objective (minimize): FLOPs\n')
-            f.write(f'\t+ The second objective (minimize): -Synflow\n')
-            f.write(f'- Evaluate:\n')
-            f.write(f'\t+ The first objective (minimize): FLOPs\n')
-            f.write(f'\t+ The second objective (minimize): test error\n\n')
-
-            f.write(f'******* ENVIRONMENT *******\n')
-            f.write(f'- ID experiments: {run_i}\n')
-            f.write(f'- Random seed: {random_seed}\n')
-            f.write(f'- Path for saving results: {path_results_}\n\n')
-        print('-' * 40)
-
+    logging.info(f'Average IGD: {np.round(np.mean(final_IGD_lst), 4)} ({np.round(np.std(final_IGD_lst), 4)})')
+    logging.info(
+        f'Average best test-accuracy: {np.round(np.mean(best_acc_found_lst), 4)} ({np.round(np.std(best_acc_found_lst), 4)})')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -287,8 +309,8 @@ if __name__ == '__main__':
     parser.add_argument('--path_data', type=str, default=None, help='path for loading data')
     parser.add_argument('--path_results', type=str, default=None, help='path for saving results')
     parser.add_argument('--n_runs', type=int, default=31, help='number of experiment runs')
+    parser.add_argument('--maxEvals', type=int, default=3000, help='maximum number of evaluations')
     parser.add_argument('--seed', type=int, default=0, help='random seed')
-    parser.add_argument('--evaluate', type=int, default=1, help='evaluate after pruning')
     args = parser.parse_args()
 
     log_format = '%(asctime)s %(message)s'

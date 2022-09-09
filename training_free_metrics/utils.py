@@ -4,7 +4,7 @@ from collections import namedtuple
 
 Genotype = namedtuple("Genotype", "normal normal_concat reduce reduce_concat")
 
-def get_config_for_zero_cost_predictor(search_space, dataset, path_data, seed):
+def get_config_for_training_free_calculator(search_space, dataset, path_data, seed):
     config = {
         'search_space': search_space,
         'dataset': dataset,
@@ -21,7 +21,7 @@ def get_config_for_zero_cost_predictor(search_space, dataset, path_data, seed):
     }
     return config
 
-def get_zero_cost_predictor(config, method_type):
+def get_training_free_calculator(config, method_type):
     if method_type == 'grad_norm':
         predictor = ZeroCostV2(config, batch_size=64, method_type='grad_norm')
     elif method_type == 'grasp':

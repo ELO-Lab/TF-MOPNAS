@@ -10,19 +10,14 @@ In ICCCI 2022.
 ```
 $ pip install -r requirements.txt
 ```
-- If you meet a problem involving to ```fvcore``` package, please re-install it.
+- If you meet a problem involving to ```fvcore``` and ```nats-bench``` packages, please re-install it.
 ```shell
+$ pip install nats-bench
 $ pip install fvcore==0.1.5post20220119
 ```
-- Although we utilize NAS-Bench-101, NAS-Bench-1shot1, and NAS-Bench-201 benchmarks for our experiments, we do not employ directly their APIs to reduce the time and memory capability (for loading their APIs).
-In our experiments, we downloaded the database, modified their APIs, and used on our way.
-To reproduce the results in the paper (or conducting new experiments by yourself), we thus have to download the data at first. Download data in [here](https://drive.google.com/drive/folders/1jAX-By0UUOld_vLRLBLX1GppQ6lhcOvS?usp=sharing), unzip and put all folders into ```benchmark_data``` folder.
-<!-- You can compare our data to the benchmarks' APIs by following the instructions and running code in .... -->
+-  Download the database in [here](https://drive.google.com/drive/folders/1jAX-By0UUOld_vLRLBLX1GppQ6lhcOvS?usp=sharing), unzip and put all folders into ```benchmark_data``` folder for building benchmarks' APIs when conducting NAS runs.
 ## Usage
-### 1. Search
-You can reproduce all experimental results by **re-conducting all experiments by yourself** or by **downloading**. 
-#### 1.1. Do experiments from scratch
-**TF-MOPNAS**
+***Note:*** To experiment without changing too much in the source code, we recommend that the *benchmarks' databases*  should be stored in the default folder (i.e., `benchmark_data`) 
 ```shell
 $ python <running_file> --n_runs <the_number_of_experiment_runs, default: 31> --seed <initial_random_seed, default: 0>
 ```
@@ -38,33 +33,6 @@ For example, we want to search on NAS-Bench-201 benchmark:
 ```shell
 $ python run_201.py
 ```
-**MOENAS + TF-MOENAS**
-
-We will upload the source code in later. However, you can download the results of MOENAS and TF-MOENAS by following the section 1.2.
-#### 1.2. Download available results
-Download `results.zip` in [here](https://drive.google.com/drive/folders/17p5q3kxK6x3H7Tdf7RLDTg39zIPAxBU5?usp=sharing), unzip and put all folders into ```results``` folder.
-
-### 2. Evaluate
-#### 2.1. To generate figures of IGD trends
-```shell
-$ python <running_file>
-```
-To conduct evaluate on a specific search space, we just run the corresponding file.
-|running_file                        |Benchmark              |         
-|:-----------------------------------|:----------------------|
-|`visualize_results_101.py`          |NAS-Bench-101          |
-|`visualize_results_201.py`          |NAS-Bench-201          |
-
-For example, we want to evaluate the performance (i.e., the IGD indicator) of algorithms on NAS-Bench-201 benchmark:
-```shell
-$ python visualize_results_201.py
-```
-#### 2.2. To get the final IGD and the accuracy of the best architecture found
-```shell
-$ python get_final_performance.py
-```
-
-***Note:*** To experiment without changing too much in the source code, we recommend that the *benchmarks' databases* and *experimental results* should be stored in  default folders (i.e., `benchmark_data` and `results`) 
 
 ## Results in paper
 ### NAS-Bench-101
